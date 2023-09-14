@@ -1,0 +1,214 @@
+---
+title: "Bayesian Prediction of Matt Olson"
+author: "Drew Grier"
+date: "2023-04-07"
+output:
+  html_document:
+    df_print: paged
+---
+```{r setup, include = FALSE}
+library(tidyverse)
+library(ProbBayes)
+library(ggplot2)
+library(rstan)
+Olson_stats <- read.csv("C:/Users/Drew Grier/Downloads/Olson_stats.csv")
+Olson_spring <- read.csv("C:/Users/Drew Grier/Downloads/Olson_spring.csv")
+
+# Define data
+career_data <- Olson_stats %>% select(Year, OPS)
+OPS_avg <- mean(career_data$OPS)
+OPS_sd <- sd(career_data$OPS)
+spring_data <- data.frame(player = "Matt Olson",
+                           Year = 2023,
+                           OPS = rnorm(600, 1.5, 1)) %>%
+  subset(OPS >= 0)
+```
+
+# A Bayesian Take on Prediction of OPS
+
+## Introduction
+I am an avid baseball fan and enjoy the in depth analysis that analytics have come to play in today's game. More specifically I am from Atlanta; therefore, making me a Braves fanatic. Given that I want to take a look at a player that will come to define the next generation of stars in Atlanta. Yes, Ronald Acuna, Ozzie Albies, Max Fried, and even Austin Riley have come to be the premier name associated with the Atlanta Braves - this does not overshadow the significance of Matt Olson, a home grown talent (meaning from Atlanta, not the farm system). Atlanta managed to absolutely fleece the Oakland A's last year when they traded a handful of prospects for the superstar - only really one of which, Shea Langliers, has started to make a name for himself. In an appropriate move, the Braves then locked him up to an 8 year deal to stay in his home city having grown up about 30 min away in the suburbs of Lilburn, GA. 
+
+Olson had big shoes to fill - the Braves had just let Freddie Freeman, a perennial talent and future Hall of Famer, walk in free-agency to the LA Dodgers - at an uber important position in both the lineup and the field. It's safe to say Matt Olson managed to live up to the expectations to a very high degree. He amassed a slash line of .240/.325/.477 and contributed to a wRC+ of 120 or to say 20% better than the league average. Yes, those numbers are down from an All-Star campaign a year prior in which his slash line included a .271/.371/.540 and a wRC+ of 147, he still managed to play stellar defense playing all 162 games at first base last year. It may have been a "less stellar" of a year from a purely numbers perspective, but Olson moved to a more balanced team and still contributed the second most homers with 36 on a home run hitting team. Not only that, but he and the other Brave Bombers took the NL East title from the NY Mets in middle August and never looked back securing yet another playoff run. 
+
+What does all this mean, however? This all goes to set the stage for why I think now that Olson has had time to settle into his role as the next great leader of a high powered offense, his numbers will start to show just how valuable and great an addition he is to the team.  
+
+P.S. I still miss Freddie :'(
+
+## Methodology
+Well, how am I going to prove that he's going to even better than advertised? FanGraphs has a number of projection programs and algorithms out there that plug and chug numbers to give you an output. Among them are ZiPS, Steamer, FGDC, The BAT, and the BAT X. These projections and their formulas are all hidden to the general public behind pay walls and league rights. I want to create my own model using a Bayesian approach that will take his career numbers (as of the writing of this piece), input "data" from spring training, and produce a posterior distribution or model that will give us an idea of what his metrics will look like this coming year. For this model specifically I will be looking at OPS, but you can program it to look at any count statistic in baseball. It does not work very well for baseball statistics that are already averaged out such as the slash lines.
+
+### Bayesian Analysis
+Since this is a Bayesian Analysis based project there is some math that goes on behind the scenes of the code. Do not worry if you do not understand all that is taking place, the basics of what is going on was explained above, but to rehash, we are simply laying down a prior model of Matt Olson's OPS based on his career stats.
+
+#### Prior Model
+Next, we need to define the parameters of our Bayesian Model. Our prior $\mu$ is going to be a continuous variable (of OPS) influenced by the statistics we have from his career.
+$$
+\begin{aligned}
+\mu \sim{Normal}(\mu_0, \sigma_0)
+\end{aligned}
+$$
+Where $\mu$ is the OPS mean of Matt Olson's career games distributed normally with parameters $\mu_{0}, \sigma_{0}$. The parameter $\mu_0$ defines our "best-guess" of Olson's mean OPS and $\sigma_0$ defines how sure we are of that best guess. The prior distribution should look something like this:
+
+```{r prior graph, warning = FALSE}
+# Define the parameters of the normal distribution
+mu_0 <- .843125
+sigma_0 <- 0.2020173
+
+# Create a data frame of x-values and corresponding density values
+x <- seq(mu_0 - 3*sigma_0, mu_0 + 3*sigma_0, length.out = 100)
+y <- dnorm(x, mean = mu_0, sd = sigma_0)
+prior_df <- data.frame(x = x, y = y)
+
+# Plot the density curve
+ggplot(prior_df, aes(x = x, y = y)) +
+  geom_line(size = 1) +
+  labs(x = "OPS", y = "Density") +
+  ggtitle("Prior distribution of Matt Olson's OPS") +
+  theme_minimal()
+
+```
+
+Essentially what the graph above is modeling is a basic normal curve showing the continuous distribution of Matt Olson's OPS based on the 8 season's he's played prior. Our mean of the curve is centered at .843 with a standard deviation of $\approx .202$. This makes sense if we think about it intuitively, given that out of the 8 season's Olson has played a hefty majority have been with OPS's above .750. We could produce some intervals to show just how much of the distribution is between a given OPS, but I think the curve highlights that well enough.
+
+One thing I want to tinker with is giving different weights to each of the season's. The program/code has assigned equal weight to all 8 seasons that Olson has played, but obviously that is not the case given he played only 20 games in his rookie year and 60 during the COVID shortened season. Ideally, in order to correct this, I would have to alter the code to place higher weight on full seasons or simulate the AB's per season giving each the same weight.
+
+#### Likelihood and Data
+Next we are going to take some data (our data is Matt Olson's spring stats) in order to find the likelihood function. Our likelihood function can be defined as the following.
+$$
+\begin{aligned}
+L(\mu) \propto \exp \left\{-\frac{n}{2 \sigma^2}(\bar{y} - \mu)^2\right\}
+\end{aligned}
+$$
+
+Our "sample" is the 18 Games or (57 AB's) that Matt Olson played in spring training that resulted in 8 Home Runs. We know the mean of the data which is 1.509, but we do not know the standard deviation of his spring training games, because game by game OPS is not available. However, what we can do is look at his first 57 AB's (which is how many he had during spring training) to begin the year and take the OPS of those games and get a standard deviation from that. We get a standard deviation of about 1 and we use that in a simulation of 600 trials to produce enough data inferred from spring training. The 600 is chosen as a mark due to that being close to the same number of AB's he would acquire in a full season.
+
+#### Posterior Calculation
+```{r posterior1, warning=FALSE}
+# Define our Priors
+mu0 <- .843125
+sig0 <- 0.2020173
+
+# Define our Data paramters
+n <- 18 
+ybar <- 1.509
+sig <- 1
+
+# Manual Calculation
+phi0 <- 1/sig0^2
+phi <- 1/sig^2
+
+weight0 <- phi0/(phi0+n*phi)
+weightdata <- n*phi/(phi0+n*phi)
+c(weight0,weightdata)
+weight0+weightdata
+
+muN <- weight0*mu0 + weightdata*ybar
+muN
+
+sigN <- 1/sqrt(n*phi+phi0)
+sigN
+
+c(muN,sigN)
+```
+
+By manual calculation we get a $\mu_N$ based on the data of 1.251 and $\sigma_N$ of .1533872. We can check this with the ProbBayes package which will do all of this behind the scenes.
+
+```{r probbayes, warning = FALSE}
+# Using the normal_update in package ProbBayes
+prior <- c(mu0,sig0)
+data <- c(ybar,sig/sqrt(n))
+
+normal_update(prior,data)
+```
+
+We get exactly the same numbers through the function in the package. That's good news, means we're on track. Now we can plot the prior and posterior based on the evidence we have shown to the model.
+
+```{r graph of both prior and post, warning = FALSE}
+# Define the parameters of the normal distribution
+mu_0 <- .843125
+sigma_0 <- .2020173
+
+# Create a data frame of x-values and corresponding density values
+x <- seq(mu_0 - 3*sigma_0, mu_0 + 3*sigma_0, length.out = 100)
+y_prior <- dnorm(x, mean = mu_0, sd = sigma_0)
+y_posterior <- dnorm(x, mean = muN, sd = sigN)
+df <- data.frame(x = x, y_prior = y_prior, y_posterior = y_posterior)
+
+# Plot the density curves
+ggplot(df, aes(x = x, y = y_prior)) +
+  geom_line(color = "blue", size = 1) +
+  geom_line(aes(y = y_posterior), color = "magenta", size = 1) +
+  labs(x = "mean OPS", y = "density") +
+  ggtitle("Prior and Posterior distribution of OPS") +
+  theme_minimal() +
+  scale_y_continuous(limits = c(0, max(df$y_posterior)*1.2)) +
+  scale_color_manual(name = "Density", labels = c("Prior", "Posterior"), values = c("blue", "magenta")) +
+  theme(legend.position = "topleft") +
+  guides(color = guide_legend(title = "", override.aes = list(size = 2))) 
+
+```
+
+So what does this plot mean? Given the broad, and I mean very broad prior distribution (in blue), our model takes the "data" we imputed and outputs the posterior distribution (in pink). Intuitively the posterior makes sense based on the numbers we have in the code. We are going to see a massive shift towards the OPS seen in spring training. The range of the plot is going to tighten a bit, but a whole lot is not going to happen in terms of actually predicting something that is worthwhile to baseball application. It is simply not feasible for any player (except maybe Ted Williams?) to hover over an OPS of 1 throughout the season. This basic plot is just giving us an idea that yes Matt Olson's ridiculous spring training will affect his OPS for the coming season based on his prior seasons. What we can do is run a Markov Chain Monte Carlo simulation that will run iterations of season's based on his fast spring training start and produce a very tight distribution of OPS for the coming season.
+
+#### Posterior with MCMC
+```{r posterior distribution, warning = FALSE}
+# Define prior distribution based on career statistics
+prior_mean <- mean(career_data$OPS)
+prior_sd <- sd(career_data$OPS)
+
+# Compile the model
+model_data <- list(n = nrow(spring_data), y = spring_data$OPS, prior_mean = prior_mean, prior_sd = prior_sd)
+fit <- stan(file = "bayes.stan", data = model_data)
+
+#//saved as bayes.stan
+#data {
+#  int n;
+#  real y[n];
+#  real prior_mean;
+#  real<lower=0> prior_sd;
+#}
+#parameters {
+#  real mu;
+#  real<lower=0> sigma;
+#}
+#model {
+#  mu ~ normal(prior_mean, prior_sd);
+#  y ~ normal(mu, sigma);
+#}
+
+# Sum stats
+posterior_summary <- summary(fit)
+
+# Predict the density of certain OPS values
+new_data <- data.frame(OPS = seq(.825, .895, length.out = 50))
+predicted_probs <- data.frame(OPS = new_data$OPS, density = dnorm(new_data$OPS, posterior_summary$summary[2, 1], posterior_summary$summary[2, 2]))
+
+# Visualize the posterior distribution and predicted probabilities
+ggplot() +
+  geom_line(data = predicted_probs, aes(x = OPS, y = density)) +
+  geom_vline(xintercept = prior_mean, linetype = "dashed", color = "blue", 
+             size = 1, alpha = 0.7, 
+             show.legend = TRUE, 
+             aes(linetype = "Prior Mean")) +
+  geom_vline(xintercept = posterior_summary$summary[2, 1], linetype = "dashed", color = "red", 
+             size = 1, alpha = 0.7, 
+             show.legend = TRUE, 
+             aes(linetype = "Posterior Mean")) +
+  labs(x = "OPS", y = "Density", 
+       title = "Posterior Distribution and Predicted Probabilities",
+       subtitle = "Based on Spring Training Data for Matt Olson",
+       caption = "Blue dashed line: prior mean\nRed dashed line: posterior mean") +
+  scale_linetype(name = "", 
+                 labels = c("Prior Mean", "Posterior Mean"), 
+                 guide = guide_legend(title = NULL)) +
+  theme_minimal()
+
+```
+
+The MCMC simulation produces an output very different from the "simple" math calculations we used above it. This is because we are simulating 2000 iterations in 4 chains. Our simulation does give us a more comprehensible value for an OPS of a season than the prior manual calculations of the posterior. Here we find an OPS mean of $\approx .875$ which is very reasonable for Olson who as we know is about a .850 OPS hitter in his career. What is interesting to note about this model is that it gives us a very defined answer to our question of prediction. The tails on the posterior distribution are almost nonexistent. The "curve" is very tight around the posterior OPS we found. That means we can be super confident about our model performing an accurate simulation.
+
+## Conclusion
+This whole project was basically an experiment to see if I could implement some of the things I have been learning in my Bayesian Statistics class at Kenyon College. I wanted to see if I could showcase the new knowledge I had just learned with some of the things I am passionate about in the game, specifically the Atlanta Braves. Whether you're a supporter or not, I am very excited to see what Matt Olson can do during his sophomore season in Atlanta. It would be insanely nice to see an OPS around the mark that our model predicted, but even if he doesn't make it to that point I am sure he will provide ample offense at the top of the lineup for the Bombing Braves. 
+
+If you wanna chat more about the Braves or baseball in general feel free to email me at grier@1kenyon.edu. I am definitely aware that this is a rough sketch of a project, but I think it showcases a bit about bayesian statistics and MCMC's. 
